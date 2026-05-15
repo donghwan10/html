@@ -1,0 +1,73 @@
+{
+  "name": "llm-html-previewer",
+  "version": "0.1.0",
+  "description": "A local Windows desktop reader for LLM-generated HTML and Markdown.",
+  "main": "./out/main/main.js",
+  "author": "Codex",
+  "license": "MIT",
+  "private": true,
+  "scripts": {
+    "dev": "node node_modules/electron-vite/bin/electron-vite.js dev",
+    "build": "node node_modules/typescript/bin/tsc --noEmit && node node_modules/electron-vite/bin/electron-vite.js build",
+    "preview": "node node_modules/electron-vite/bin/electron-vite.js preview",
+    "test": "node node_modules/vitest/vitest.mjs run",
+    "dist:win": "npm run build && node node_modules/electron-builder/cli.js --win nsis portable"
+  },
+  "dependencies": {
+    "@codemirror/commands": "^6.8.1",
+    "@codemirror/lang-html": "^6.4.9",
+    "@codemirror/lang-markdown": "^6.3.4",
+    "@codemirror/state": "^6.5.2",
+    "@codemirror/theme-one-dark": "^6.1.3",
+    "@codemirror/view": "^6.38.8",
+    "dompurify": "^3.4.2",
+    "lucide-react": "^0.468.0",
+    "marked": "^16.4.1",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "sharp": "^0.34.5"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "@types/react": "^19.2.7",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^5.1.1",
+    "electron": "^39.2.6",
+    "electron-builder": "^26.0.12",
+    "electron-vite": "^4.0.0",
+    "jsdom": "^27.3.0",
+    "typescript": "^5.9.3",
+    "vite": "^7.2.7",
+    "vitest": "^4.0.15"
+  },
+  "build": {
+    "appId": "local.codex.llm-html-previewer",
+    "productName": "LLM HTML Previewer",
+    "files": [
+      "out/**/*",
+      "package.json"
+    ],
+    "directories": {
+      "output": "release"
+    },
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ],
+      "artifactName": "${productName}-${version}-${arch}.${ext}",
+      "signAndEditExecutable": false,
+      "forceCodeSigning": false
+    },
+    "nsis": {
+      "artifactName": "${productName}-${version}-${arch}-Setup.${ext}",
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    },
+    "portable": {
+      "artifactName": "${productName}-${version}-${arch}-Portable.${ext}"
+    }
+  }
+}
