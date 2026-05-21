@@ -34,6 +34,43 @@ describe("buildPreviewDocument", () => {
     expect(html).toContain("color-scheme: dark");
     expect(html).toContain("--reader-bg:");
   });
+
+  it("emits custom reader controls as CSS variables and feature classes", () => {
+    const html = buildPreviewDocument({
+      contentHtml: "<h1>Hello</h1><p>Readable text</p><pre><code>const value = 1;</code></pre>",
+      settings: {
+        ...defaultPreviewSettings,
+        themeMode: "light",
+        contentPadding: 58,
+        fontWeight: 700,
+        letterSpacing: 0.5,
+        wordSpacing: 2,
+        paragraphSpacing: 1.4,
+        paragraphIndent: 1.2,
+        textAlign: "justify",
+        textColor: "#223344",
+        headingScale: 1.2,
+        codeWrap: true,
+        highContrast: true,
+        koreanLineBreak: true
+      },
+      title: "Custom reader"
+    });
+
+    expect(html).toContain('class="theme-light contrast-high korean-line-break code-wrap"');
+    expect(html).toContain("--reader-padding: 58px;");
+    expect(html).toContain("--reader-weight: 700;");
+    expect(html).toContain("--reader-letter: 0.5px;");
+    expect(html).toContain("--reader-word: 2px;");
+    expect(html).toContain("--reader-paragraph-spacing: 1.4em;");
+    expect(html).toContain("--reader-indent: 1.2em;");
+    expect(html).toContain("--reader-align: justify;");
+    expect(html).toContain("--reader-heading-scale: 1.2;");
+    expect(html).toContain("--reader-text: #223344;");
+    expect(html).toContain("html.code-wrap pre");
+    expect(html).toContain("html.korean-line-break .reader-shell");
+    expect(html).toContain("html.contrast-high");
+  });
 });
 
 describe("createPreviewPipeline", () => {

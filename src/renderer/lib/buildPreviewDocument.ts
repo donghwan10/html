@@ -20,6 +20,14 @@ function escapeCssString(value: string): string {
   return value.replaceAll("\\", "\\\\").replaceAll('"', '\\"').replace(/[\r\n]/g, " ");
 }
 
+function clampNumber(value: number, fallback: number, min: number, max: number): number {
+  return Number.isFinite(value) ? Math.max(min, Math.min(max, value)) : fallback;
+}
+
+function safeTextAlign(value: PreviewSettings["textAlign"]): PreviewSettings["textAlign"] {
+  return value === "center" || value === "right" || value === "justify" ? value : "left";
+}
+
 function themeClass(themeMode: PreviewSettings["themeMode"]): string {
   if (themeMode === "custom") {
     return "theme-custom";
@@ -41,10 +49,26 @@ export function buildPreviewDocument({
   const backgroundColor = /^#[0-9a-f]{6}$/i.test(settings.backgroundColor)
     ? settings.backgroundColor
     : "#f4f6f8";
+  const textColor = /^#[0-9a-f]{6}$/i.test(settings.textColor) ? settings.textColor : null;
   const customTheme = getCustomThemeColors(settings.customBrightness);
+  const documentClasses = [
+    themeClass(settings.themeMode),
+    settings.highContrast ? "contrast-high" : "",
+    settings.koreanLineBreak ? "korean-line-break" : "",
+    settings.codeWrap ? "code-wrap" : ""
+  ]
+    .filter(Boolean)
+    .join(" ");
+  const fontWeight = clampNumber(settings.fontWeight, 400, 300, 800);
+  const letterSpacing = clampNumber(settings.letterSpacing, 0, 0, 2);
+  const wordSpacing = clampNumber(settings.wordSpacing, 0, 0, 8);
+  const paragraphSpacing = clampNumber(settings.paragraphSpacing, 1, 0.5, 2.5);
+  const paragraphIndent = clampNumber(settings.paragraphIndent, 0, 0, 3);
+  const headingScale = clampNumber(settings.headingScale, 1, 0.8, 1.4);
+  const contentPadding = clampNumber(settings.contentPadding, 46, 18, 72);
 
   return `<!doctype html>
-<html lang="ko" class="${themeClass(settings.themeMode)}">
+<html lang="ko" class="${documentClasses}">
   <head>
     <meta charset="utf-8">
     <meta http-equiv="Content-Security-Policy" content="${escapeHtml(csp)}">
@@ -63,7 +87,15 @@ export function buildPreviewDocument({
         --reader-font: "${fontFamily}", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
         --reader-size: ${settings.fontSize}px;
         --reader-width: ${settings.maxWidth}px;
+        --reader-padding: ${contentPadding}px;
         --reader-line: ${settings.lineHeight};
+        --reader-weight: ${fontWeight};
+        --reader-letter: ${letterSpacing}px;
+        --reader-word: ${wordSpacing}px;
+        --reader-paragraph-spacing: ${paragraphSpacing}em;
+        --reader-indent: ${paragraphIndent}em;
+        --reader-align: ${safeTextAlign(settings.textAlign)};
+        --reader-heading-scale: ${headingScale};
       }
 
       html.theme-dark {
@@ -101,6 +133,25 @@ export function buildPreviewDocument({
         }
       }
 
+      ${
+        textColor
+          ? `html {
+        --reader-text: ${textColor};
+      }`
+          : ""
+      }
+
+      html.contrast-high {
+        color-scheme: dark;
+        --reader-bg: #000000;
+        --reader-page: #000000;
+        --reader-text: #ffffff;
+        --reader-muted: #f2f2f2;
+        --reader-border: #ffffff;
+        --reader-code-bg: #111111;
+        --reader-link: #ffea00;
+      }
+
       * {
         box-sizing: border-box;
       }
@@ -125,14 +176,40 @@ export function buildPreviewDocument({
         margin: 0 auto;
         background: var(--reader-page);
         border: 1px solid var(--reader-border);
-        padding: clamp(22px, 4vw, 46px);
+        padding: var(--reader-padding);
         min-height: calc(100vh - 64px);
+        font-weight: var(--reader-weight);
+        letter-spacing: var(--reader-letter);
+        word-spacing: var(--reader-word);
+        text-align: var(--reader-align);
       }
 
       h1, h2, h3, h4, h5, h6 {
         line-height: 1.24;
         margin: 1.35em 0 0.55em;
         letter-spacing: 0;
+        font-weight: 700;
+      }
+
+      h1 {
+        font-size: calc(var(--reader-size) * 2 * var(--reader-heading-scale));
+      }
+
+      h2 {
+        font-size: calc(var(--reader-size) * 1.65 * var(--reader-heading-scale));
+      }
+
+      h3 {
+        font-size: calc(var(--reader-size) * 1.35 * var(--reader-heading-scale));
+      }
+
+      h4 {
+        font-size: calc(var(--reader-size) * 1.18 * var(--reader-heading-scale));
+      }
+
+      h5,
+      h6 {
+        font-size: calc(var(--reader-size) * 1.05 * var(--reader-heading-scale));
       }
 
       h1:first-child,
@@ -149,6 +226,11 @@ export function buildPreviewDocument({
       pre {
         margin-top: 0;
         margin-bottom: 1em;
+      }
+
+      p {
+        margin-bottom: var(--reader-paragraph-spacing);
+        text-indent: var(--reader-indent);
       }
 
       a {
@@ -192,6 +274,9 @@ export function buildPreviewDocument({
       code,
       pre {
         font-family: "Cascadia Code", "Fira Code", Consolas, monospace;
+        font-weight: 400;
+        letter-spacing: 0;
+        word-spacing: 0;
       }
 
       code {
@@ -205,11 +290,41 @@ export function buildPreviewDocument({
         border: 1px solid var(--reader-border);
         overflow-x: auto;
         padding: 1em;
+        text-align: left;
+        white-space: pre;
       }
 
       pre code {
         background: transparent;
         padding: 0;
+        white-space: inherit;
+      }
+
+      html.code-wrap pre {
+        overflow-wrap: anywhere;
+        white-space: pre-wrap;
+      }
+
+      html.korean-line-break .reader-shell {
+        word-break: keep-all;
+        overflow-wrap: break-word;
+        line-break: strict;
+      }
+
+      html.korean-line-break code,
+      html.korean-line-break pre {
+        word-break: normal;
+        overflow-wrap: normal;
+        line-break: auto;
+      }
+
+      html.contrast-high .reader-shell {
+        border-width: 2px;
+      }
+
+      html.contrast-high a {
+        text-decoration-thickness: 0.12em;
+        text-underline-offset: 0.18em;
       }
 
       hr {

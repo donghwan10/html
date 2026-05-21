@@ -7,12 +7,14 @@ import { oneDark } from "@codemirror/theme-one-dark";
 import { FolderOpen, ImagePlus, RotateCcw } from "lucide-react";
 import {
   forwardRef,
+  type ReactElement,
   useEffect,
   useImperativeHandle,
   useMemo,
   useRef
 } from "react";
 import type { InputMode, ResolvedInputMode } from "../../shared/types";
+import type { PreviewFrameId } from "../lib/previewScroll";
 import IconButton from "./IconButton";
 
 export interface EditorPaneHandle {
@@ -20,12 +22,33 @@ export interface EditorPaneHandle {
   focus: () => void;
 }
 
+interface CodeEditorHandle {
+  insertText: (text: string) => void;
+  focus: () => void;
+}
+
+interface CodeEditorProps {
+  active: boolean;
+  dark: boolean;
+  placeholderText: string;
+  resolvedMode: ResolvedInputMode;
+  value: string;
+  onChange: (value: string) => void;
+  onFocus: () => void;
+}
+
 interface EditorPaneProps {
   value: string;
+  secondaryValue: string;
+  activePane: PreviewFrameId;
+  doubleMode: boolean;
   inputMode: InputMode;
   resolvedMode: ResolvedInputMode;
+  secondaryResolvedMode: ResolvedInputMode;
   dark: boolean;
   onChange: (value: string) => void;
+  onSecondaryChange: (value: string) => void;
+  onActivePaneChange: (pane: PreviewFrameId) => void;
   onModeChange: (mode: InputMode) => void;
   onOpenFile: () => void;
   onInsertImage: () => void;
@@ -36,27 +59,19 @@ function languageExtension(mode: ResolvedInputMode) {
   return mode === "html" ? html() : markdown();
 }
 
-const EditorPane = forwardRef<EditorPaneHandle, EditorPaneProps>(function EditorPane(
-  {
-    value,
-    inputMode,
-    resolvedMode,
-    dark,
-    onChange,
-    onModeChange,
-    onOpenFile,
-    onInsertImage,
-    onClear
-  },
+const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(function CodeEditor(
+  { active, dark, placeholderText, resolvedMode, value, onChange, onFocus },
   ref
 ) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const viewRef = useRef<EditorView | null>(null);
   const onChangeRef = useRef(onChange);
+  const onFocusRef = useRef(onFocus);
   const languageCompartment = useMemo(() => new Compartment(), []);
   const themeCompartment = useMemo(() => new Compartment(), []);
 
   onChangeRef.current = onChange;
+  onFocusRef.current = onFocus;
 
   useImperativeHandle(
     ref,
@@ -86,8 +101,18 @@ const EditorPane = forwardRef<EditorPaneHandle, EditorPaneProps>(function Editor
         extensions: [
           lineNumbers(),
           history(),
-          placeholder("HTML 또는 Markdown을 붙여넣기"),
+          placeholder(placeholderText),
           EditorView.lineWrapping,
+          EditorView.domEventHandlers({
+            focus: () => {
+              onFocusRef.current();
+              return false;
+            },
+            pointerdown: () => {
+              onFocusRef.current();
+              return false;
+            }
+          }),
           EditorView.updateListener.of((update) => {
             if (update.docChanged) {
               onChangeRef.current(update.state.doc.toString());
@@ -166,12 +191,57 @@ const EditorPane = forwardRef<EditorPaneHandle, EditorPaneProps>(function Editor
     });
   }, [dark, themeCompartment]);
 
+  return <div className={`editor-host ${active ? "editor-host--active" : ""}`} ref={hostRef} />;
+});
+
+const EditorPane = forwardRef<EditorPaneHandle, EditorPaneProps>(function EditorPane(
+  {
+    value,
+    secondaryValue,
+    activePane,
+    doubleMode,
+    inputMode,
+    resolvedMode,
+    secondaryResolvedMode,
+    dark,
+    onChange,
+    onSecondaryChange,
+    onActivePaneChange,
+    onModeChange,
+    onOpenFile,
+    onInsertImage,
+    onClear
+  },
+  ref
+) {
+  const primaryRef = useRef<CodeEditorHandle | null>(null);
+  const secondaryRef = useRef<CodeEditorHandle | null>(null);
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      insertText: (text: string) => {
+        const target = doubleMode && activePane === "secondary" ? secondaryRef.current : primaryRef.current;
+        target?.insertText(text);
+      },
+      focus: () => {
+        const target = doubleMode && activePane === "secondary" ? secondaryRef.current : primaryRef.current;
+        target?.focus();
+      }
+    }),
+    [activePane, doubleMode]
+  );
+
+  const status = doubleMode
+    ? `Top ${resolvedMode.toUpperCase()} / Bottom ${secondaryResolvedMode.toUpperCase()}`
+    : resolvedMode.toUpperCase();
+
   return (
-    <div className="editor-pane">
+    <div className={`editor-pane ${doubleMode ? "editor-pane--double" : ""}`}>
       <div className="pane-header">
         <div>
           <h1>입력</h1>
-          <p>{resolvedMode.toUpperCase()}</p>
+          <p>{status}</p>
         </div>
         <div className="segmented-control" aria-label="입력 모드">
           {(["auto", "html", "markdown"] as InputMode[]).map((mode) => (
@@ -187,7 +257,37 @@ const EditorPane = forwardRef<EditorPaneHandle, EditorPaneProps>(function Editor
         </div>
       </div>
 
-      <div className="editor-host" ref={hostRef} />
+      <div className={doubleMode ? "editor-stack editor-stack--double" : "editor-stack"}>
+        <section className="editor-stack__pane" aria-label="Top input">
+          {doubleMode ? <div className="editor-stack__label">Top</div> : null}
+          <CodeEditor
+            ref={primaryRef}
+            active={!doubleMode || activePane === "primary"}
+            dark={dark}
+            placeholderText="HTML 또는 Markdown을 붙여넣기"
+            resolvedMode={resolvedMode}
+            value={value}
+            onChange={onChange}
+            onFocus={() => onActivePaneChange("primary")}
+          />
+        </section>
+
+        {doubleMode ? (
+          <section className="editor-stack__pane" aria-label="Bottom input">
+            <div className="editor-stack__label">Bottom</div>
+            <CodeEditor
+              ref={secondaryRef}
+              active={activePane === "secondary"}
+              dark={dark}
+              placeholderText="비교할 HTML 또는 Markdown을 붙여넣기"
+              resolvedMode={secondaryResolvedMode}
+              value={secondaryValue}
+              onChange={onSecondaryChange}
+              onFocus={() => onActivePaneChange("secondary")}
+            />
+          </section>
+        ) : null}
+      </div>
 
       <div className="pane-actions">
         <IconButton icon={<FolderOpen size={16} />} label="열기" onClick={onOpenFile} />

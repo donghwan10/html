@@ -12,19 +12,37 @@ import type {
   InputMode,
   PreviewDocumentRegistrationResult,
   PreviewMode,
-  PreviewZoomCommand,
   PreviewSettings,
+  PreviewZoomCommand,
   ThemeMode
 } from "../shared/types";
 import EditorPane, { type EditorPaneHandle } from "./components/EditorPane";
-import FullscreenPreview from "./components/FullscreenPreview";
-import PreviewPane from "./components/PreviewPane";
+import FullscreenPreview, { type FullscreenPreviewHandle } from "./components/FullscreenPreview";
+import PreviewPane, { type PreviewFrameView, type PreviewPaneHandle } from "./components/PreviewPane";
 import SplitLayout from "./components/SplitLayout";
+import { buildDoubleContentDocument, buildDoublePreviewDocument } from "./lib/doublePreviewDocument";
 import { buildImageTag } from "./lib/imageInsert";
-import { createPreviewPipeline, htmlToPlainText } from "./lib/previewPipeline";
+import type { PreviewFrameId, PreviewScrollSnapshots } from "./lib/previewScroll";
+import { createPreviewPipeline, htmlToPlainText, type PreviewPipelineResult } from "./lib/previewPipeline";
 import { countVisibleCharacters } from "./lib/previewTextStats";
 import { loadPreviewSettings, savePreviewSettings } from "./lib/settingsStore";
 import { getCustomThemeColors } from "./lib/themeBrightness";
+
+interface SourceState {
+  primary: string;
+  secondary: string;
+}
+
+interface NameState {
+  primary: string;
+  secondary: string;
+}
+
+interface PreviewEntry {
+  id: PreviewFrameId;
+  label: string;
+  preview: PreviewPipelineResult;
+}
 
 function useDebouncedValue<T>(value: T, delayMs: number): T {
   const [debounced, setDebounced] = useState(value);
@@ -69,6 +87,14 @@ function modeStatus(mode: PreviewMode): string {
   return "Safe Reader";
 }
 
+function primaryHtmlForPreview(preview: PreviewPipelineResult): string {
+  return preview.mode === "safe-reader" ? preview.sanitizedHtml : preview.sourceHtml;
+}
+
+function primarySuffixForMode(mode: PreviewMode): string {
+  return mode === "safe-reader" ? "-body.html" : "-source.html";
+}
+
 const previewZoomMin = 50;
 const previewZoomMax = 300;
 const previewZoomStep = 10;
@@ -100,19 +126,31 @@ function buildCustomAppThemeStyle(brightness: number): AppThemeStyle {
 
 export default function App(): ReactElement {
   const editorRef = useRef<EditorPaneHandle | null>(null);
-  const [source, setSource] = useState("");
+  const previewPaneRef = useRef<PreviewPaneHandle | null>(null);
+  const fullscreenRef = useRef<FullscreenPreviewHandle | null>(null);
+  const [sources, setSources] = useState<SourceState>({ primary: "", secondary: "" });
+  const [activeSource, setActiveSource] = useState<PreviewFrameId>("primary");
   const [inputMode, setInputMode] = useState<InputMode>("auto");
   const [settings, setSettings] = useState<PreviewSettings>(() => loadPreviewSettings());
-  const [currentName, setCurrentName] = useState("preview.html");
+  const [currentNames, setCurrentNames] = useState<NameState>({
+    primary: "preview.html",
+    secondary: "preview-secondary.html"
+  });
   const [status, setStatus] = useState("Ready");
   const [settingsOpen, setSettingsOpen] = useState(true);
   const [fullscreen, setFullscreen] = useState(false);
+  const [fullscreenInitialScrollSnapshots, setFullscreenInitialScrollSnapshots] = useState<PreviewScrollSnapshots>({});
+  const [pendingPreviewScrollRestore, setPendingPreviewScrollRestore] = useState<PreviewScrollSnapshots | null>(null);
   const [previewZoom, setPreviewZoom] = useState(100);
   const [ctrlZoomActive, setCtrlZoomActive] = useState(false);
   const [systemTheme, setSystemTheme] = useState<"light" | "dark">(() => getSystemTheme());
-  const [registeredPreview, setRegisteredPreview] = useState<PreviewDocumentRegistrationResult | null>(null);
+  const [registeredPreviews, setRegisteredPreviews] = useState<
+    Partial<Record<PreviewFrameId, PreviewDocumentRegistrationResult>>
+  >({});
+  const statusLabelRef = useRef("Ready");
 
-  const debouncedSource = useDebouncedValue(source, 300);
+  const debouncedSources = useDebouncedValue(sources, 300);
+  const effectiveActiveSource = settings.doubleMode ? activeSource : "primary";
 
   useEffect(() => {
     const media = window.matchMedia("(prefers-color-scheme: dark)");
@@ -125,6 +163,12 @@ export default function App(): ReactElement {
     savePreviewSettings(settings);
   }, [settings]);
 
+  useEffect(() => {
+    if (!settings.doubleMode) {
+      setActiveSource("primary");
+    }
+  }, [settings.doubleMode]);
+
   const effectiveTheme = settings.themeMode === "system" ? systemTheme : settings.themeMode;
   const appThemeStyle = useMemo(
     () => (settings.themeMode === "custom" ? buildCustomAppThemeStyle(settings.customBrightness) : undefined),
@@ -132,12 +176,139 @@ export default function App(): ReactElement {
   );
   const editorDark = effectiveTheme === "dark" || (effectiveTheme === "custom" && settings.customBrightness < 50);
 
-  const preview = useMemo(
-    () => createPreviewPipeline(debouncedSource, inputMode, settings, currentName),
-    [currentName, debouncedSource, inputMode, settings]
+  const primaryPreview = useMemo(
+    () => createPreviewPipeline(debouncedSources.primary, inputMode, settings, currentNames.primary),
+    [currentNames.primary, debouncedSources.primary, inputMode, settings]
   );
 
-  const previewCharacterCount = useMemo(() => countVisibleCharacters(preview.previewHtml), [preview.previewHtml]);
+  const secondaryPreview = useMemo(
+    () => createPreviewPipeline(debouncedSources.secondary, inputMode, settings, currentNames.secondary),
+    [currentNames.secondary, debouncedSources.secondary, inputMode, settings]
+  );
+
+  const previewEntries = useMemo<PreviewEntry[]>(
+    () =>
+      settings.doubleMode
+        ? [
+            { id: "primary", label: "Left", preview: primaryPreview },
+            { id: "secondary", label: "Right", preview: secondaryPreview }
+          ]
+        : [{ id: "primary", label: "Preview", preview: primaryPreview }],
+    [primaryPreview, secondaryPreview, settings.doubleMode]
+  );
+
+  const previewMode = primaryPreview.mode;
+  const previewCharacterCount = useMemo(
+    () => previewEntries.reduce((total, entry) => total + countVisibleCharacters(entry.preview.previewHtml), 0),
+    [previewEntries]
+  );
+
+  const statusLabel = useMemo(() => {
+    if (settings.doubleMode) {
+      return `${primaryPreview.resolvedMode.toUpperCase()} / ${secondaryPreview.resolvedMode.toUpperCase()} / ${modeStatus(
+        previewMode
+      )}`;
+    }
+    return `${primaryPreview.resolvedMode.toUpperCase()} / ${modeStatus(previewMode)}`;
+  }, [previewMode, primaryPreview.resolvedMode, secondaryPreview.resolvedMode, settings.doubleMode]);
+
+  useEffect(() => {
+    statusLabelRef.current = statusLabel;
+    setStatus(statusLabel);
+  }, [statusLabel]);
+
+  const previewItems = useMemo<PreviewFrameView[]>(
+    () =>
+      previewEntries.map((entry) => ({
+        id: entry.id,
+        label: entry.label,
+        mode: entry.preview.mode,
+        previewDocumentHtml: entry.preview.previewHtml,
+        previewUrl: entry.preview.mode === "trusted-interactive" ? registeredPreviews[entry.id]?.url ?? null : null,
+        sandbox: entry.preview.sandbox
+      })),
+    [previewEntries, registeredPreviews]
+  );
+
+  const combinedPreviewDocumentHtml = useMemo(() => {
+    if (!settings.doubleMode) {
+      return primaryPreview.previewHtml;
+    }
+
+    return buildDoublePreviewDocument({
+      items: [
+        { label: "Left", html: primaryPreview.previewHtml },
+        { label: "Right", html: secondaryPreview.previewHtml }
+      ],
+      title: "Double preview",
+      themeMode: settings.themeMode,
+      previewMode
+    });
+  }, [previewMode, primaryPreview.previewHtml, secondaryPreview.previewHtml, settings.doubleMode, settings.themeMode]);
+
+  const combinedPrimaryHtml = useMemo(() => {
+    if (!settings.doubleMode) {
+      return primaryHtmlForPreview(primaryPreview);
+    }
+
+    return buildDoubleContentDocument(
+      [
+        { label: "Left", html: primaryHtmlForPreview(primaryPreview) },
+        { label: "Right", html: primaryHtmlForPreview(secondaryPreview) }
+      ],
+      "Double content"
+    );
+  }, [primaryPreview, secondaryPreview, settings.doubleMode]);
+
+  useEffect(() => {
+    let disposed = false;
+    const registeredIds: string[] = [];
+
+    if (previewMode !== "trusted-interactive") {
+      setRegisteredPreviews({});
+      return () => undefined;
+    }
+
+    setRegisteredPreviews({});
+
+    Promise.all(
+      previewEntries.map(async (entry) => {
+        const result = await window.previewerApi.registerPreviewDocument({
+          html: entry.preview.previewHtml,
+          mode: entry.preview.mode
+        });
+        return { id: entry.id, result };
+      })
+    )
+      .then((results) => {
+        const nextRegistered: Partial<Record<PreviewFrameId, PreviewDocumentRegistrationResult>> = {};
+        results.forEach(({ id, result }) => {
+          if (!result) {
+            return;
+          }
+          registeredIds.push(result.id);
+          nextRegistered[id] = result;
+        });
+
+        if (disposed) {
+          registeredIds.forEach((id) => void window.previewerApi.revokePreviewDocument(id));
+          return;
+        }
+
+        setRegisteredPreviews(nextRegistered);
+      })
+      .catch(() => setRegisteredPreviews({}));
+
+    return () => {
+      disposed = true;
+      registeredIds.forEach((id) => void window.previewerApi.revokePreviewDocument(id));
+    };
+  }, [previewEntries, previewMode]);
+
+  const showStatus = useCallback((message: string): void => {
+    setStatus(message);
+    window.setTimeout(() => setStatus(statusLabelRef.current), 1800);
+  }, []);
 
   const adjustPreviewZoom = useCallback((delta: number): void => {
     setPreviewZoom((current) => clampPreviewZoom(current + delta));
@@ -199,58 +370,24 @@ export default function App(): ReactElement {
     [adjustPreviewZoom]
   );
 
-  useEffect(() => {
-    let disposed = false;
-    let registeredId: string | null = null;
-
-    if (preview.mode !== "trusted-interactive") {
-      setRegisteredPreview(null);
-      return () => undefined;
-    }
-
-    setRegisteredPreview(null);
-
-    window.previewerApi
-      .registerPreviewDocument({ html: preview.previewHtml, mode: preview.mode })
-      .then((result) => {
-        if (!result) {
-          return;
-        }
-        registeredId = result.id;
-        if (disposed) {
-          void window.previewerApi.revokePreviewDocument(result.id);
-          return;
-        }
-        setRegisteredPreview(result);
-      })
-      .catch(() => setRegisteredPreview(null));
-
-    return () => {
-      disposed = true;
-      if (registeredId) {
-        void window.previewerApi.revokePreviewDocument(registeredId);
-      }
-    };
-  }, [preview.mode, preview.previewHtml]);
-
-  const showStatus = (message: string): void => {
-    setStatus(message);
-    window.setTimeout(() => setStatus(`${preview.resolvedMode.toUpperCase()} / ${modeStatus(preview.mode)}`), 1800);
+  const updateSource = (pane: PreviewFrameId, value: string): void => {
+    setSources((current) => ({ ...current, [pane]: value }));
   };
 
-  useEffect(() => {
-    setStatus(`${preview.resolvedMode.toUpperCase()} / ${modeStatus(preview.mode)}`);
-  }, [preview.mode, preview.resolvedMode]);
+  const updateName = (pane: PreviewFrameId, value: string): void => {
+    setCurrentNames((current) => ({ ...current, [pane]: value }));
+  };
 
   const handleOpenFile = async (): Promise<void> => {
     const file = await window.previewerApi.openSourceFile();
     if (!file) {
       return;
     }
-    setSource(file.content);
+
+    updateSource(effectiveActiveSource, file.content);
+    updateName(effectiveActiveSource, file.name);
     setInputMode(file.suggestedMode);
-    setCurrentName(file.name);
-    showStatus("File opened");
+    showStatus(settings.doubleMode ? `${effectiveActiveSource === "primary" ? "Top" : "Bottom"} file opened` : "File opened");
   };
 
   const handleInsertImage = async (): Promise<void> => {
@@ -263,9 +400,11 @@ export default function App(): ReactElement {
   };
 
   const handleClear = (): void => {
-    setSource("");
-    setInputMode("auto");
-    setCurrentName("preview.html");
+    updateSource(effectiveActiveSource, "");
+    updateName(effectiveActiveSource, effectiveActiveSource === "primary" ? "preview.html" : "preview-secondary.html");
+    if (!settings.doubleMode) {
+      setInputMode("auto");
+    }
     editorRef.current?.focus();
   };
 
@@ -284,23 +423,23 @@ export default function App(): ReactElement {
     setSettings((current) => ({ ...current, previewMode: mode }));
   };
 
-  const primaryHtml = preview.mode === "safe-reader" ? preview.sanitizedHtml : preview.sourceHtml;
-  const primarySuffix = preview.mode === "safe-reader" ? "-body.html" : "-source.html";
-
   const handleSaveBodyHtml = async (): Promise<void> => {
+    const defaultPath = settings.doubleMode
+      ? "preview-double-body.html"
+      : defaultName(currentNames.primary, primarySuffixForMode(previewMode));
     const saved = await window.previewerApi.saveHtml({
-      html: primaryHtml,
-      defaultName: defaultName(currentName, primarySuffix)
+      html: combinedPrimaryHtml,
+      defaultName: defaultPath
     });
     if (saved) {
-      showStatus(preview.mode === "safe-reader" ? "Body HTML saved" : "Source HTML saved");
+      showStatus(settings.doubleMode ? "Double content saved" : previewMode === "safe-reader" ? "Body HTML saved" : "Source HTML saved");
     }
   };
 
   const handleSaveFullHtml = async (): Promise<void> => {
     const saved = await window.previewerApi.saveHtml({
-      html: preview.previewHtml,
-      defaultName: defaultName(currentName, "-document.html")
+      html: combinedPreviewDocumentHtml,
+      defaultName: settings.doubleMode ? "preview-double-document.html" : defaultName(currentNames.primary, "-document.html")
     });
     if (saved) {
       showStatus("Current document saved");
@@ -309,9 +448,9 @@ export default function App(): ReactElement {
 
   const handleExportPdf = async (): Promise<void> => {
     const saved = await window.previewerApi.exportPdf({
-      previewDocumentHtml: preview.previewHtml,
-      previewMode: preview.mode,
-      defaultName: defaultName(currentName, ".pdf")
+      previewDocumentHtml: combinedPreviewDocumentHtml,
+      previewMode,
+      defaultName: settings.doubleMode ? "preview-double.pdf" : defaultName(currentNames.primary, ".pdf")
     });
     if (saved) {
       showStatus("PDF saved");
@@ -320,11 +459,11 @@ export default function App(): ReactElement {
 
   const handleExportImage = async (format: "png" | "jpg", captureMode: "viewport" | "fullDocument"): Promise<void> => {
     const saved = await window.previewerApi.exportImage({
-      previewDocumentHtml: preview.previewHtml,
-      previewMode: preview.mode,
+      previewDocumentHtml: combinedPreviewDocumentHtml,
+      previewMode,
       format,
       captureMode,
-      defaultName: defaultName(currentName, `.${format}`)
+      defaultName: settings.doubleMode ? `preview-double.${format}` : defaultName(currentNames.primary, `.${format}`)
     });
     if (saved) {
       showStatus(`${format.toUpperCase()} saved`);
@@ -333,18 +472,20 @@ export default function App(): ReactElement {
 
   const handleCopyCleanHtml = async (): Promise<void> => {
     const copied = await window.previewerApi.copyHtml({
-      html: primaryHtml,
-      text: htmlToPlainText(primaryHtml)
+      html: combinedPrimaryHtml,
+      text: htmlToPlainText(combinedPrimaryHtml)
     });
     if (copied) {
-      showStatus(preview.mode === "safe-reader" ? "Clean HTML copied" : "Source HTML copied");
+      showStatus(settings.doubleMode ? "Double content copied" : previewMode === "safe-reader" ? "Clean HTML copied" : "Source HTML copied");
     }
   };
 
   const handleCopyFullHtml = async (): Promise<void> => {
     const copied = await window.previewerApi.copyHtml({
-      html: preview.previewHtml,
-      text: htmlToPlainText(preview.sanitizedHtml)
+      html: combinedPreviewDocumentHtml,
+      text: settings.doubleMode
+        ? `${htmlToPlainText(primaryPreview.sanitizedHtml)}\n\n${htmlToPlainText(secondaryPreview.sanitizedHtml)}`.trim()
+        : htmlToPlainText(primaryPreview.sanitizedHtml)
     });
     if (copied) {
       showStatus("Current document copied");
@@ -353,13 +494,22 @@ export default function App(): ReactElement {
 
   const handleOpenInBrowser = async (): Promise<void> => {
     const opened = await window.previewerApi.openInBrowser({
-      html: preview.browserOpenHtml,
-      defaultName: defaultName(currentName, "-browser.html")
+      html: settings.doubleMode ? combinedPreviewDocumentHtml : primaryPreview.browserOpenHtml,
+      defaultName: settings.doubleMode ? "preview-double-browser.html" : defaultName(currentNames.primary, "-browser.html")
     });
     showStatus(opened ? "Opened in browser" : "Browser open failed");
   };
 
-  const previewUrl = preview.mode === "trusted-interactive" ? registeredPreview?.url ?? null : null;
+  const handleOpenFullscreen = (): void => {
+    setFullscreenInitialScrollSnapshots(previewPaneRef.current?.readScrollSnapshots() ?? {});
+    setFullscreen(true);
+  };
+
+  const handleCloseFullscreen = (): void => {
+    const snapshots = fullscreenRef.current?.readScrollSnapshots() ?? {};
+    setFullscreen(false);
+    setPendingPreviewScrollRestore(snapshots);
+  };
 
   return (
     <main className="app-shell" data-theme={effectiveTheme} style={appThemeStyle}>
@@ -367,11 +517,17 @@ export default function App(): ReactElement {
         left={
           <EditorPane
             ref={editorRef}
-            value={source}
+            value={sources.primary}
+            secondaryValue={sources.secondary}
+            activePane={effectiveActiveSource}
+            doubleMode={settings.doubleMode}
             inputMode={inputMode}
-            resolvedMode={preview.resolvedMode}
+            resolvedMode={primaryPreview.resolvedMode}
+            secondaryResolvedMode={secondaryPreview.resolvedMode}
             dark={editorDark}
-            onChange={setSource}
+            onChange={(value) => updateSource("primary", value)}
+            onSecondaryChange={(value) => updateSource("secondary", value)}
+            onActivePaneChange={setActiveSource}
             onModeChange={setInputMode}
             onOpenFile={handleOpenFile}
             onInsertImage={handleInsertImage}
@@ -380,19 +536,20 @@ export default function App(): ReactElement {
         }
         right={
           <PreviewPane
-            previewDocumentHtml={preview.previewHtml}
-            previewUrl={previewUrl}
-            sandbox={preview.sandbox}
-            previewMode={preview.mode}
+            ref={previewPaneRef}
+            previewItems={previewItems}
+            previewMode={previewMode}
             previewZoom={previewZoom}
             characterCount={previewCharacterCount}
             settings={settings}
             status={status}
             settingsOpen={settingsOpen}
+            restoreScrollSnapshots={pendingPreviewScrollRestore}
+            onRestoreScrollSnapshots={() => setPendingPreviewScrollRestore(null)}
             onPreviewModeChange={handlePreviewModeChange}
             onSettingsChange={setSettings}
             onToggleSettings={() => setSettingsOpen((open) => !open)}
-            onFullscreen={() => setFullscreen(true)}
+            onFullscreen={handleOpenFullscreen}
             onSaveBodyHtml={handleSaveBodyHtml}
             onSaveFullHtml={handleSaveFullHtml}
             onExportPdf={handleExportPdf}
@@ -407,11 +564,11 @@ export default function App(): ReactElement {
 
       {fullscreen ? (
         <FullscreenPreview
-          previewDocumentHtml={preview.previewHtml}
-          previewUrl={previewUrl}
-          sandbox={preview.sandbox}
+          ref={fullscreenRef}
+          previewItems={previewItems}
           previewZoom={previewZoom}
-          onClose={() => setFullscreen(false)}
+          initialScrollSnapshots={fullscreenInitialScrollSnapshots}
+          onClose={handleCloseFullscreen}
         />
       ) : null}
 

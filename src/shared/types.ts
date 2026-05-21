@@ -12,6 +12,8 @@ export type CaptureMode = "viewport" | "fullDocument";
 
 export type PreviewZoomCommand = "zoom-in" | "zoom-out" | "zoom-reset" | "control-down" | "control-up";
 
+export type TextAlign = "left" | "center" | "right" | "justify";
+
 export interface PreviewSecurityProfile {
   mode: PreviewMode;
   csp: string;
@@ -24,10 +26,23 @@ export interface PreviewSettings {
   fontFamily: string;
   fontSize: number;
   maxWidth: number;
+  contentPadding: number;
   lineHeight: number;
+  fontWeight: number;
+  letterSpacing: number;
+  wordSpacing: number;
+  paragraphSpacing: number;
+  paragraphIndent: number;
+  textAlign: TextAlign;
+  textColor: string;
+  headingScale: number;
+  codeWrap: boolean;
+  highContrast: boolean;
+  koreanLineBreak: boolean;
   backgroundColor: string;
   allowRemoteImages: boolean;
   previewMode: PreviewMode;
+  doubleMode: boolean;
   allowDataAndBlobResources: boolean;
   interactiveConfirmed: boolean;
 }
