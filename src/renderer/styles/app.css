@@ -264,6 +264,61 @@ button {
   color: var(--muted);
 }
 
+.editor-host .cm-panels {
+  color: var(--text);
+  background: var(--panel-soft);
+  border-color: var(--border);
+}
+
+.editor-host .cm-panels-top {
+  border-bottom: 1px solid var(--border);
+}
+
+.editor-host .cm-search {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 8px;
+}
+
+.editor-host .cm-search input {
+  height: 28px;
+  min-width: 120px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0 8px;
+  color: var(--text);
+  background: var(--panel);
+}
+
+.editor-host .cm-search button {
+  height: 28px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0 8px;
+  color: var(--text);
+  background: var(--panel);
+}
+
+.editor-host .cm-search button:hover {
+  border-color: var(--border-strong);
+  background: var(--accent-soft);
+}
+
+.editor-host .cm-search label {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.editor-host .cm-searchMatch {
+  background: rgba(255, 214, 94, 0.48);
+}
+
+.editor-host .cm-searchMatch-selected {
+  background: rgba(18, 103, 214, 0.32);
+}
+
 .pane-actions,
 .export-bar {
   display: flex;

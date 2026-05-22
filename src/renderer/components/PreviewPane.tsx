@@ -26,6 +26,7 @@ import {
   useState
 } from "react";
 import type { CaptureMode, ExportImageFormat, PreviewMode, PreviewSettings } from "../../shared/types";
+import { shouldIgnorePreviewFindShortcutTarget } from "../lib/findShortcutTarget";
 import { activateFindMatch, cleanupFindHighlights, highlightFindMatches } from "../lib/previewFind";
 import {
   type PreviewFrameId,
@@ -257,6 +258,9 @@ const PreviewPane = forwardRef<PreviewPaneHandle, PreviewPaneProps>(function Pre
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "f") {
+        if (shouldIgnorePreviewFindShortcutTarget(event.target)) {
+          return;
+        }
         event.preventDefault();
         openFind(activeFrameIdRef.current);
         return;

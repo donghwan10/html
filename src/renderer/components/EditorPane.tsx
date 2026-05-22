@@ -1,6 +1,7 @@
 import { defaultKeymap, history, historyKeymap, indentWithTab, redo, undo } from "@codemirror/commands";
 import { html } from "@codemirror/lang-html";
 import { markdown } from "@codemirror/lang-markdown";
+import { highlightSelectionMatches, openSearchPanel, search, searchKeymap } from "@codemirror/search";
 import { Compartment, EditorState } from "@codemirror/state";
 import { EditorView, keymap, lineNumbers, placeholder } from "@codemirror/view";
 import { oneDark } from "@codemirror/theme-one-dark";
@@ -8,6 +9,7 @@ import { FolderOpen, ImagePlus, RotateCcw } from "lucide-react";
 import {
   forwardRef,
   type ReactElement,
+  useCallback,
   useEffect,
   useImperativeHandle,
   useMemo,
@@ -25,6 +27,7 @@ export interface EditorPaneHandle {
 interface CodeEditorHandle {
   insertText: (text: string) => void;
   focus: () => void;
+  openFind: () => void;
 }
 
 interface CodeEditorProps {
@@ -84,7 +87,14 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(function CodeEd
         view.dispatch(view.state.replaceSelection(text));
         view.focus();
       },
-      focus: () => viewRef.current?.focus()
+      focus: () => viewRef.current?.focus(),
+      openFind: () => {
+        const view = viewRef.current;
+        if (!view) {
+          return;
+        }
+        openSearchPanel(view);
+      }
     }),
     []
   );
@@ -102,6 +112,8 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(function CodeEd
           lineNumbers(),
           history(),
           placeholder(placeholderText),
+          search({ top: true }),
+          highlightSelectionMatches(),
           EditorView.lineWrapping,
           EditorView.domEventHandlers({
             focus: () => {
@@ -119,6 +131,7 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(function CodeEd
             }
           }),
           keymap.of([
+            ...searchKeymap,
             { key: "Mod-z", run: undo },
             { key: "Mod-y", run: redo },
             { key: "Shift-Mod-z", run: redo },
@@ -216,6 +229,54 @@ const EditorPane = forwardRef<EditorPaneHandle, EditorPaneProps>(function Editor
 ) {
   const primaryRef = useRef<CodeEditorHandle | null>(null);
   const secondaryRef = useRef<CodeEditorHandle | null>(null);
+  const hoveredPaneRef = useRef<PreviewFrameId | null>(null);
+  const activePaneRef = useRef(activePane);
+  const doubleModeRef = useRef(doubleMode);
+
+  activePaneRef.current = activePane;
+  doubleModeRef.current = doubleMode;
+
+  const openActiveEditorFind = useCallback((): void => {
+    const targetPane = hoveredPaneRef.current ?? activePaneRef.current;
+    const target = doubleModeRef.current && targetPane === "secondary" ? secondaryRef.current : primaryRef.current;
+    target?.openFind();
+  }, []);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== "f") {
+        return;
+      }
+
+      const target = event.target;
+      const targetInEditor = target instanceof Element && target.closest(".editor-pane") !== null;
+      if (!targetInEditor && hoveredPaneRef.current === null) {
+        return;
+      }
+
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation();
+      openActiveEditorFind();
+    };
+
+    window.addEventListener("keydown", onKeyDown, { capture: true });
+    return () => window.removeEventListener("keydown", onKeyDown, { capture: true });
+  }, [openActiveEditorFind]);
+
+  const markHoveredPane = useCallback(
+    (pane: PreviewFrameId): void => {
+      hoveredPaneRef.current = pane;
+      onActivePaneChange(pane);
+    },
+    [onActivePaneChange]
+  );
+
+  const clearHoveredPane = useCallback((pane: PreviewFrameId): void => {
+    if (hoveredPaneRef.current === pane) {
+      hoveredPaneRef.current = null;
+    }
+  }, []);
 
   useImperativeHandle(
     ref,
@@ -258,7 +319,12 @@ const EditorPane = forwardRef<EditorPaneHandle, EditorPaneProps>(function Editor
       </div>
 
       <div className={doubleMode ? "editor-stack editor-stack--double" : "editor-stack"}>
-        <section className="editor-stack__pane" aria-label="Top input">
+        <section
+          className="editor-stack__pane"
+          aria-label="Top input"
+          onPointerEnter={() => markHoveredPane("primary")}
+          onPointerLeave={() => clearHoveredPane("primary")}
+        >
           {doubleMode ? <div className="editor-stack__label">Top</div> : null}
           <CodeEditor
             ref={primaryRef}
@@ -273,7 +339,12 @@ const EditorPane = forwardRef<EditorPaneHandle, EditorPaneProps>(function Editor
         </section>
 
         {doubleMode ? (
-          <section className="editor-stack__pane" aria-label="Bottom input">
+          <section
+            className="editor-stack__pane"
+            aria-label="Bottom input"
+            onPointerEnter={() => markHoveredPane("secondary")}
+            onPointerLeave={() => clearHoveredPane("secondary")}
+          >
             <div className="editor-stack__label">Bottom</div>
             <CodeEditor
               ref={secondaryRef}

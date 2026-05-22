@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { buildDoublePreviewDocument } from "../src/renderer/lib/doublePreviewDocument";
+import { shouldIgnorePreviewFindShortcutTarget } from "../src/renderer/lib/findShortcutTarget";
 import { activateFindMatch, cleanupFindHighlights, highlightFindMatches } from "../src/renderer/lib/previewFind";
 import { applyScrollSnapshotToElement, snapshotScrollElement } from "../src/renderer/lib/previewScroll";
 import { defaultPreviewSettings, loadPreviewSettings } from "../src/renderer/lib/settingsStore";
@@ -60,6 +61,23 @@ describe("preview find helper", () => {
 
     expect(document.querySelectorAll("mark[data-preview-find]")).toHaveLength(0);
     expect(document.body.textContent).toContain("Hello hello");
+  });
+});
+
+describe("find shortcut target helper", () => {
+  it("keeps preview find shortcuts away from editor and form controls", () => {
+    document.body.innerHTML = `
+      <div class="editor-pane"><div class="cm-editor"><span id="editor-text">Source</span></div></div>
+      <div class="preview-find-bar"><input id="preview-find" /></div>
+      <textarea id="source-area"></textarea>
+      <button id="preview-button">Preview</button>
+    `;
+
+    expect(shouldIgnorePreviewFindShortcutTarget(document.getElementById("editor-text"))).toBe(true);
+    expect(shouldIgnorePreviewFindShortcutTarget(document.getElementById("preview-find"))).toBe(true);
+    expect(shouldIgnorePreviewFindShortcutTarget(document.getElementById("source-area"))).toBe(true);
+    expect(shouldIgnorePreviewFindShortcutTarget(document.getElementById("preview-button"))).toBe(false);
+    expect(shouldIgnorePreviewFindShortcutTarget(null)).toBe(false);
   });
 });
 
