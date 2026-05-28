@@ -62,6 +62,13 @@ function languageExtension(mode: ResolvedInputMode) {
   return mode === "html" ? html() : markdown();
 }
 
+function releaseIframeKeyboardFocus(): void {
+  if (document.activeElement instanceof HTMLIFrameElement) {
+    document.activeElement.blur();
+    window.focus();
+  }
+}
+
 const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(function CodeEditor(
   { active, dark, placeholderText, resolvedMode, value, onChange, onFocus },
   ref
@@ -266,6 +273,7 @@ const EditorPane = forwardRef<EditorPaneHandle, EditorPaneProps>(function Editor
 
   const markHoveredPane = useCallback(
     (pane: PreviewFrameId): void => {
+      releaseIframeKeyboardFocus();
       hoveredPaneRef.current = pane;
       onActivePaneChange(pane);
     },
